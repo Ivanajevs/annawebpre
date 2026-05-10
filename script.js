@@ -1,29 +1,23 @@
 /* ═══════════════════════════════════════════════════════════════════
    St. Anna Merch Shop – script.js
+   EmailJS vollständig entfernt → E-Mails laufen über Supabase Edge Function
    ═══════════════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────────────────────────────────────────────
-   ① EMAILJS KONFIGURATION
+   ① SUPABASE KONFIGURATION
    ───────────────────────────────────────────────────────────────────── */
-const EMAILJS_PUBLIC_KEY   = "Dud4-yGPgxrJfb0ny";
-const EMAILJS_SERVICE_ID   = "service_n850bzk";
-const EMAILJS_ADMIN_TPL_ID = "template_8qh2y65";
-const EMAILJS_USER_TPL_ID  = "template_giifnmo";
+const SUPABASE_URL      = "https://ilbfdcwlmucsyqepurcp.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_cyQE2-XQdw1r8WzP6WnEkA_qjaDAfm1";
 
-/* ─────────────────────────────────────────────────────────────────────
-   ② SUPABASE KONFIGURATION
-   ▶ Ersetze die beiden Platzhalter mit deinen echten Werten aus:
-     Supabase Dashboard → Project Settings → API
-   ───────────────────────────────────────────────────────────────────── */
-const SUPABASE_URL      = "https://ilbfdcwlmucsyqepurcp.supabase.co";   // ← anpassen
-const SUPABASE_ANON_KEY = "sb_publishable_cyQE2-XQdw1r8WzP6WnEkA_qjaDAfm1";                   // ← anpassen
+// URL der Edge Function – wird automatisch aus der SUPABASE_URL abgeleitet
+const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/send-email`;
 
 // Supabase-Client initialisieren (CDN-Import – siehe index.html)
 const { createClient } = supabase;
 const supabaseClient   = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ─────────────────────────────────────────────────────────────────────
-   ③ PRODUKTDATEN
+   ② PRODUKTDATEN
    ───────────────────────────────────────────────────────────────────── */
 const products = [
   {
@@ -55,23 +49,23 @@ const products = [
 ];
 
 /* ─────────────────────────────────────────────────────────────────────
-   ④ STATE
+   ③ STATE
    ───────────────────────────────────────────────────────────────────── */
 let currentProduct = null;
 
 /* ─────────────────────────────────────────────────────────────────────
-   ⑤ EINDEUTIGE BESTELL-ID GENERIEREN
+   ④ EINDEUTIGE BESTELL-ID GENERIEREN
    Format: SA-<Zeitstempel Base36>-<4 Zufallszeichen>
    Beispiel: SA-LR8K2A-F3TQ
    ───────────────────────────────────────────────────────────────────── */
 function generateOrderId() {
-  const ts   = Date.now().toString(36).toUpperCase();          // zeitbasiert
-  const rand = Math.random().toString(36).substr(2, 4).toUpperCase(); // zufällig
+  const ts   = Date.now().toString(36).toUpperCase();
+  const rand = Math.random().toString(36).substr(2, 4).toUpperCase();
   return `SA-${ts}-${rand}`;
 }
 
 /* ─────────────────────────────────────────────────────────────────────
-   ⑥ PRODUKTE RENDERN
+   ⑤ PRODUKTE RENDERN
    ───────────────────────────────────────────────────────────────────── */
 function renderProducts() {
   const grid = document.getElementById("productsGrid");
@@ -121,7 +115,7 @@ function renderProducts() {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
-   ⑦ FARB-PICKER
+   ⑥ FARB-PICKER
    ───────────────────────────────────────────────────────────────────── */
 function buildColorPicker(colors) {
   const row    = document.getElementById("colorSwatchRow");
@@ -155,7 +149,7 @@ function buildColorPicker(colors) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
-   ⑧ MODAL – ÖFFNEN / SCHLIESSEN
+   ⑦ MODAL – ÖFFNEN / SCHLIESSEN
    ───────────────────────────────────────────────────────────────────── */
 function openModal(product) {
   currentProduct = product;
@@ -206,7 +200,7 @@ document.addEventListener("keydown", e => {
 document.getElementById("successClose").addEventListener("click", closeModal);
 
 /* ─────────────────────────────────────────────────────────────────────
-   ⑨ FORMULAR-VALIDIERUNG
+   ⑧ FORMULAR-VALIDIERUNG
    ───────────────────────────────────────────────────────────────────── */
 function validateForm() {
   const fields = [
@@ -233,11 +227,11 @@ function validateForm() {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
-   ⑩ BESTELLUNG ABSENDEN
+   ⑨ BESTELLUNG ABSENDEN
    Ablauf:
      1. Bestell-ID generieren
      2. Daten in Supabase speichern
-     3. Zwei E-Mails via EmailJS versenden (inkl. order_id)
+     3. E-Mails über Supabase Edge Function → Mailjet versenden
    ───────────────────────────────────────────────────────────────────── */
 document.getElementById("orderForm").addEventListener("submit", async function (e) {
   e.preventDefault();
@@ -262,7 +256,6 @@ document.getElementById("orderForm").addEventListener("submit", async function (
     order_id:       orderId,
     product_name:   currentProduct.name,
     product_price:  currentProduct.price,
-    product_img:    window.location.origin + "/" + currentProduct.img,
     size:           document.getElementById("fieldSize").value,
     color:          document.getElementById("fieldColor").value,
     gender:         document.getElementById("fieldGender").value,
@@ -275,7 +268,6 @@ document.getElementById("orderForm").addEventListener("submit", async function (
                       day: "2-digit", month: "2-digit", year: "numeric",
                       hour: "2-digit", minute: "2-digit",
                     }),
-    reply_to: document.getElementById("fieldEmail").value.trim(),
   };
 
   try {
@@ -296,22 +288,27 @@ document.getElementById("orderForm").addEventListener("submit", async function (
         note:           orderData.note,
       });
 
-    if (dbError) throw new Error("Supabase: " + dbError.message);
+    if (dbError) throw new Error("Supabase DB: " + dbError.message);
 
-    // ── Schritt 2: Mail an den Shop ────────────────────────────────
-    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ADMIN_TPL_ID, {
-      ...orderData,
-      to_email: "bestellung@merch.st-anna.de",
+    // ── Schritt 2: E-Mails über Edge Function versenden ───────────
+    const mailRes = await fetch(EDGE_FUNCTION_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({
+        action: "new_order",
+        order:  orderData,
+      }),
     });
 
-    // ── Schritt 3: Bestätigungsmail an den Käufer ─────────────────
-    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_USER_TPL_ID, {
-      ...orderData,
-      to_email: orderData.customer_email,
-    });
+    if (!mailRes.ok) {
+      const errText = await mailRes.text();
+      throw new Error("Edge Function: " + errText);
+    }
 
     // ── Erfolg anzeigen ───────────────────────────────────────────
-    // Bestell-ID im Erfolgs-Panel anzeigen
     const successPanel = document.getElementById("modalSuccess");
     const existingId   = successPanel.querySelector(".success-order-id");
     if (!existingId) {
@@ -337,9 +334,8 @@ document.getElementById("orderForm").addEventListener("submit", async function (
 });
 
 /* ─────────────────────────────────────────────────────────────────────
-   ⑪ APP STARTEN
+   ⑩ APP STARTEN
    ───────────────────────────────────────────────────────────────────── */
 (function init() {
-  emailjs.init(EMAILJS_PUBLIC_KEY);
   renderProducts();
 })();
